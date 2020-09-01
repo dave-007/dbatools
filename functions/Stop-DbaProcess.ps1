@@ -1,209 +1,158 @@
-﻿Function Stop-DbaProcess
-{
-<#
-.SYNOPSIS
-This command finds and kills SQL Server processes.
+function Stop-DbaProcess {
+    <#
+    .SYNOPSIS
+        This command finds and kills SQL Server processes.
 
-.DESCRIPTION
-This command kills all spids associated with a spid, login, host, program or database.
-	
-If you are attempting to kill your own login sessions, the process performing the kills will be skipped.
+    .DESCRIPTION
+        This command kills all spids associated with a spid, login, host, program or database.
 
-.PARAMETER SqlServer
-The SQL Server instance.
+        If you are attempting to kill your own login sessions, the process performing the kills will be skipped.
 
-.PARAMETER SqlCredential
-Allows you to login to servers using SQL Logins as opposed to Windows Auth/Integrated/Trusted. 
+    .PARAMETER SqlInstance
+        The target SQL Server instance or instances.
 
-.PARAMETER Spids
-This parameter is auto-populated from -SqlServer. You can specify one or more Spids to be killed.
+    .PARAMETER SqlCredential
+        Login to the target instance using alternative credentials. Accepts PowerShell credentials (Get-Credential).
 
-.PARAMETER Logins
-This parameter is auto-populated from-SqlServer and allows only login names that have active processes. You can specify one or more logins whose processes will be killed.
+        Windows Authentication, SQL Server Authentication, Active Directory - Password, and Active Directory - Integrated are all supported.
 
-.PARAMETER Hosts
-This parameter is auto-populated from -SqlServer and allows only host names that have active processes. You can specify one or more Hosts whose processes will be killed.
+        For MFA support, please use Connect-DbaInstance.
 
-.PARAMETER Programs
-This parameter is auto-populated from -SqlServer and allows only program names that have active processes. You can specify one or more Programs whose processes will be killed.
+    .PARAMETER Spid
+        Specifies one or more spids to be killed. Options for this parameter are auto-populated from the server.
 
-.PARAMETER Databases
-This parameter is auto-populated from -SqlServer and allows only database names that have active processes. You can specify one or more Databases whose processes will be killed.
+    .PARAMETER Login
+        Specifies one or more login names whose processes will be killed. Options for this parameter are auto-populated from the server and only login names that have active processes are offered.
 
-.PARAMETER Exclude
-This parameter is auto-populated from -SqlServer. You can specify one or more Spids to exclude from being killed (goes well with Logins).
+    .PARAMETER Hostname
+        Specifies one or more client hostnames whose processes will be killed. Options for this parameter are auto-populated from the server and only hostnames that have active processes are offered.
 
-Exclude is the last filter to run, so even if a Spid matches, for example, Hosts, if it's listed in Exclude it wil be excluded.
-	
-.NOTES 
-dbatools PowerShell module (https://dbatools.io, clemaire@gmail.com)
-Copyright (C) 2016 Chrissy LeMaire
+    .PARAMETER Program
+        Specifies one or more client programs whose processes will be killed. Options for this parameter are auto-populated from the server and only programs that have active processes are offered.
 
-This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+    .PARAMETER Database
+        Specifies one or more databases whose processes will be killed. Options for this parameter are auto-populated from the server and only databases that have active processes are offered.
 
-This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+        This parameter is auto-populated from -SqlInstance and allows only database names that have active processes. You can specify one or more Databases whose processes will be killed.
 
-You should have received a copy of the GNU General Public License along with this program.  If not, see <http://www.gnu.org/licenses/>.
+    .PARAMETER ExcludeSpid
+        Specifies one or more spids which will not be killed. Options for this parameter are auto-populated from the server.
 
-.LINK
-https://dbatools.io/Stop-DbaProcess
+        Exclude is the last filter to run, so even if a spid matches (for example) Hosts, if it's listed in Exclude it wil be excluded.
 
-.EXAMPLE
-Stop-DbaProcess -SqlServer sqlserver2014a -Logins base\ctrlb, sa
+    .PARAMETER InputObject
+        This is the process object passed by Get-DbaProcess if using a pipeline.
 
-Finds all processes for base\ctrlb and sa on sqlserver2014a, then kills them. Uses Windows Authentication to login to sqlserver2014a.
+    .PARAMETER WhatIf
+        If this switch is enabled, no actions are performed but informational messages will be displayed that explain what would happen if the command were to run.
 
-.EXAMPLE   
-Stop-DbaProcess -SqlServer sqlserver2014a -SqlCredential $credential -Spids 56, 77
-	
-Finds processes for spid 56 and 57, then kills them. Uses alternative (SQL or Windows) credentials to login to sqlserver2014a.
+    .PARAMETER Confirm
+        If this switch is enabled, you will be prompted for confirmation before executing any operations that change state.
 
-.EXAMPLE   
-Stop-DbaProcess -SqlServer sqlserver2014a -Programs 'Microsoft SQL Server Management Studio'
-	
-Finds processes that were created in Microsoft SQL Server Management Studio, then kills them.
+    .PARAMETER EnableException
+        By default, when something goes wrong we try to catch it, interpret it and give you a friendly warning message.
+        This avoids overwhelming you with "sea of red" exceptions, but is inconvenient because it basically disables advanced scripting.
+        Using this switch turns this "nice by default" feature off and enables you to catch exceptions with your own try/catch.
 
-.EXAMPLE   
-Stop-DbaProcess -SqlServer sqlserver2014a -Hosts workstationx, server100
-	
-Finds processes that were initiated by hosts (computers/clients) workstationx and server 1000, then kills them.
+    .NOTES
+        Tags: Processes
+        Author: Chrissy LeMaire (@cl), netnerds.net
 
-.EXAMPLE   
-Stop-DbaProcess -SqlServer sqlserver2014  -Databases tempdb -WhatIf
-	
-Shows what would happen if the command were executed.
-	
-#>
-	[CmdletBinding(SupportsShouldProcess = $true)]
-	Param (
-		[parameter(Mandatory = $true, ValueFromPipeline = $true)]
-		[Alias("ServerInstance", "SqlInstance")]
-		[object]$SqlServer,
-		[object]$SqlCredential
-	)
-	
-	DynamicParam { if ($sqlserver) { Get-ParamSqlAllProcessInfo -SqlServer $sqlserver -SqlCredential $SqlCredential } }
-	
-	BEGIN
-	{
-		$sourceserver = Connect-SqlServer -SqlServer $sqlserver -SqlCredential $SqlCredential
-		$source = $sourceserver.DomainInstanceName
-		
-		$logins = $psboundparameters.Logins
-		$spids = $psboundparameters.Spids
-		$exclude = $psboundparameters.Exclude
-		$hosts = $psboundparameters.Hosts
-		$programs = $psboundparameters.Programs
-		$databases = $psboundparameters.Databases
-		
-		if ($logins.count -eq 0 -and $spids.count -eq 0 -and $hosts.count -eq 0 -and $programs.count -eq 0 -and $databases.count -eq 0)
-		{
-			throw "At least one login, spid, host, program or database must be specified."
-		}
-	}
-	
-	PROCESS
-	{
-		$allsessions = @()
-		
-		$processes = $sourceserver.EnumProcesses() | Where-Object { $_.spid -gt 50 }
-		
-		if ($logins.count -gt 0)
-		{
-			$allsessions += $processes | Where-Object { $_.Login -in $Logins }
-		}
-		
-		if ($spids.count -gt 0)
-		{
-			$allsessions += $processes | Where-Object { $_.Spid -in $spids }
-		}
-		
-		if ($hosts.count -gt 0)
-		{
-			$allsessions += $processes | Where-Object { $_.Host -in $hosts }
-		}
-		
-		if ($programs.count -gt 0)
-		{
-			$allsessions += $processes | Where-Object { $_.Program -in $programs }
-		}
-		
-		if ($databases.count -gt 0)
-		{
-			$allsessions += $processes | Where-Object { $_.Database -in $databases }
-		}
-		
-		if ($exclude.count -gt 0)
-		{
-			$allsessions = $allsessions | Where-Object { $exclude -notcontains $_.Spid }
-		}
-		
-		if ($allsessions.urn.count -eq 0)
-		{
-			Write-Warning "No sessions found"
-		}
-		
-		$duplicates = @()
-		
-		foreach ($session in $allsessions)
-		{
-			if ($session.spid -in $duplicates) { continue }
-			$duplicates += $session.spid
-			
-			$spid = $session.spid
-			$login = $session.login
-			$database = $session.database
-			$program = $session.program
-			$host = $session.host
-			
-			$info = @()
-			
-			if ($login.length -gt 1)
-			{
-				$info += "Login: $login"
-			}
-			
-			if ($database.length -gt 1)
-			{
-				$info += "Database: $database"
-			}
-			
-			if ($program.length -gt 1)
-			{
-				$info += "Program: $program"
-			}
-			
-			if ($host.length -gt 1)
-			{
-				$info += "Host: $host"
-			}
-			
-			$info = $info -join ", "
-			
-			if ($sourceserver.ConnectionContext.ProcessID -eq $spid)
-			{
-				Write-Output "Skipping spid $spid because it's this process"
-				Continue
-			}
-			
-			If ($Pscmdlet.ShouldProcess($sqlserver, "Killing spid $spid ($info)"))
-			{
-				try
-				{
-					$sourceserver.KillProcess($spid)
-					Write-Output "Killed spid $spid ($info)"
-				}
-				catch
-				{
-					Write-Warning "Couldn't kill spid $spid ($info)"
-					Write-Exception $_
-				}
-			}
-		}
-	}
-	
-	END
-	{
-		$sourceserver.ConnectionContext.Disconnect()
-	}
+        Website: https://dbatools.io
+        Copyright: (c) 2018 by dbatools, licensed under MIT
+        License: MIT https://opensource.org/licenses/MIT
+
+    .LINK
+        https://dbatools.io/Stop-DbaProcess
+
+    .EXAMPLE
+        PS C:\> Stop-DbaProcess -SqlInstance sqlserver2014a -Login base\ctrlb, sa
+
+        Finds all processes for base\ctrlb and sa on sqlserver2014a, then kills them. Uses Windows Authentication to login to sqlserver2014a.
+
+    .EXAMPLE
+        PS C:\> Stop-DbaProcess -SqlInstance sqlserver2014a -SqlCredential $credential -Spid 56, 77
+
+        Finds processes for spid 56 and 57, then kills them. Uses alternative (SQL or Windows) credentials to login to sqlserver2014a.
+
+    .EXAMPLE
+        PS C:\> Stop-DbaProcess -SqlInstance sqlserver2014a -Program 'Microsoft SQL Server Management Studio'
+
+        Finds processes that were created in Microsoft SQL Server Management Studio, then kills them.
+
+    .EXAMPLE
+        PS C:\> Stop-DbaProcess -SqlInstance sqlserver2014a -Hostname workstationx, server100
+
+        Finds processes that were initiated (computers/clients) workstationx and server 1000, then kills them.
+
+    .EXAMPLE
+        PS C:\> Stop-DbaProcess -SqlInstance sqlserver2014  -Database tempdb -WhatIf
+
+        Shows what would happen if the command were executed.
+
+    .EXAMPLE
+        PS C:\> Get-DbaProcess -SqlInstance sql2016 -Program 'dbatools PowerShell module - dbatools.io' | Stop-DbaProcess
+
+        Finds processes that were created with dbatools, then kills them.
+
+    #>
+    [CmdletBinding(DefaultParameterSetName = "Default", SupportsShouldProcess)]
+    param (
+        [parameter(Mandatory, ParameterSetName = "Server")]
+        [DbaInstanceParameter]$SqlInstance,
+        [PSCredential]$SqlCredential,
+        [int[]]$Spid,
+        [int[]]$ExcludeSpid,
+        [string[]]$Database,
+        [string[]]$Login,
+        [string[]]$Hostname,
+        [string[]]$Program,
+        [parameter(ValueFromPipeline, Mandatory, ParameterSetName = "Process")]
+        [object[]]$InputObject,
+        [switch]$EnableException
+    )
+
+    process {
+        if (Test-FunctionInterrupt) { return }
+
+        if (-not $InputObject) {
+            $bound = $PSBoundParameters
+            $null = $bound.Remove("WhatIf")
+            $null = $bound.Remove("Confirm")
+            $InputObject = Get-DbaProcess @bound
+        }
+
+        foreach ($session in $InputObject) {
+            $sourceserver = $session.Parent
+
+            if (!$sourceserver) {
+                Stop-Function -Message "Only process objects can be passed through the pipeline." -Category InvalidData -Target $session
+                return
+            }
+
+            $currentspid = $session.spid
+
+            if ($sourceserver.ConnectionContext.ProcessID -eq $currentspid) {
+                Write-Message -Level Warning -Message "Skipping spid $currentspid because you cannot use KILL to kill your own process." -Target $session
+                Continue
+            }
+
+            if ($Pscmdlet.ShouldProcess($sourceserver, "Killing spid $currentspid")) {
+                try {
+                    $sourceserver.KillProcess($currentspid)
+                    [pscustomobject]@{
+                        SqlInstance = $sourceserver.name
+                        Spid        = $session.Spid
+                        Login       = $session.Login
+                        Host        = $session.Host
+                        Database    = $session.Database
+                        Program     = $session.Program
+                        Status      = 'Killed'
+                    }
+                } catch {
+                    Stop-Function -Message "Couldn't kill spid $currentspid." -Target $session -ErrorRecord $_ -Continue
+                }
+            }
+        }
+    }
 }
